@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kalos Pokédex</title>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="pokedextestversion2.css">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Kalos Pokédex<small>Generation 6 · #650 to #721</small></h1>
+    <div class="controls">
+      <div class="sort-wrap">
+        <span class="sort-placeholder">Sort by</span>
+        <select id="sort" class="sort" aria-label="Sort Pokémon">
+          <option value="id-asc">Lowest number first</option>
+          <option value="id-desc">Highest number first</option>
+          <option value="name-asc">A-Z</option>
+          <option value="name-desc">Z-A</option>
+        </select>
+      </div>
+      <div class="search-wrap">
+        <input id="search" class="search" type="search" placeholder="Search Pokémon" aria-label="Search Pokémon by name or number" autocomplete="off" aria-autocomplete="list" aria-controls="search-suggestions">
+        <button class="search-clear" type="button" aria-label="Clear search">×</button>
+        <div id="search-suggestions" class="search-suggestions" role="listbox"></div>
+      </div>
+    </div>
+  </header>
+
+  <div class="home-layout">
+    <main id="grid" class="grid"><p class="msg">Loading Pokémon…</p></main>
+  </div>
+</div>
+ 
+<div id="modal" class="modal" role="dialog" aria-modal="true">
+  <div class="panel-wrap">
+    <button class="nav-arrow nav-prev" id="prev" aria-label="Previous Pokémon">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 4 7 12l8 8"/></svg>
+    </button>
+    <div class="panel" id="panel"></div>
+    <button class="nav-arrow nav-next" id="next" aria-label="Next Pokémon">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 4 8 8-8 8"/></svg>
+    </button>
+  </div>
+</div>
+ 
+<script>
+const $ = s => document.querySelector(s);
+const sprite = id => `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${id}.png`;
+const idOf = url => Number(url.split('/').filter(Boolean).pop());
+const pad = n => '#' + String(n).padStart(4, '0');
+ 
+// Helper used by your code: fetch + parse JSON
+async function fetchAPI(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('Request failed: ' + res.status);
+  return res.json();
+}
+ 
+let all = [];
+let sortMode = '';
+let detail = null;
+let activeTab = 'Stats';
+let currentId = null;
+const typeColors = {
+  normal: '#a8a8a8', fire: '#f44336', fighting: '#ff8a00', water: '#2196f3',
+  flying: '#64b5f6', grass: '#43a047', poison: '#9c4dcc', electric: '#ffc400',
+  ground: '#9c5a2e', psychic: '#e83e8c', rock: '#bdbdbd', ice: '#26c6da',
+  bug: '#8bc34a', dragon: '#3949ab', ghost: '#7e57c2', dark: '#4e4e4e',
+  steel: '#4fa3b7', fairy: '#e875e8'
+};
+const tabs = ['Stats', 'Network', 'Rules', 'Winrate'];
+ 
+// Only Generation 6 (Kalos) Pokémon
+async function getGen6Pokemon() {
+  const gen = await fetchAPI('https://pokeapi.co/api/v2/generation/6');
+  return gen.pokemon_species
+    .map(s => ({ id: idOf(s.url), name: s.name }))
+    .sort((a, b) => a.id - b.id);
+}
+ 
+function render(list) {
+  const grid = $('#grid');
+  if (!list.length) { grid.innerHTML = '<p class="msg">No Kalos Pokémon match your search.</p>'; return; }
+  grid.innerHTML = list.map(p => `
+    <button class="card" data-id="${p.id}" aria-label="${p.name}">
+      <span class="num">${pad(p.id)}</span>
+      <img src="${sprite(p.id)}" alt="" loading="lazy">
+      <span class="name">${p.name}</span>
+    </button>`).join('');
+}
+
+function updateGrid() {
+  const rawQuery = $('#search').value.trim().toLowerCase().replace('#', '');
+  const q = /^\d+$/.test(rawQuery) ? rawQuery.replace(/^0+(?=\d)/, '') : rawQuery;
+  const filtered = all.filter(p => p.name.includes(q) || String(p.id).includes(q));
+  const mode = sortMode || 'id-asc';
+  filtered.sort((a, b) => {
+    if (mode === 'id-desc') return b.id - a.id;
+    if (mode === 'name-asc') return a.name.localeCompare(b.name);
+    if (mode === 'name-desc') return b.name.localeCompare(a.name);
+    return a.id - b.id;
+  });
+  render(filtered);
+  renderSuggestions(rawQuery);
+}
+
+function renderSuggestions(query) {
+  const list = $('#search-suggestions');
+  if (!query || /^\d+$/.test(query)) {
+    list.innerHTML = '';
+    list.classList.remove('open');
+    return;
+  }
+  const matches = all.filter(p => p.name.includes(query)).slice(0, 8);
+  list.innerHTML = matches.map(p => `
+    <button class="search-suggestion" type="button" role="option" data-name="${p.name}">
+      <span>${p.name}</span><span class="search-suggestion-id">${pad(p.id)}</span>
+    </button>`).join('');
+  list.classList.toggle('open', matches.length > 0);
+}
+ 
+const statLabels = {
+  hp: 'HP', attack: 'Attack', defense: 'Defense',
+  'special-attack': 'Sp. Atk', 'special-defense': 'Sp. Def', speed: 'Speed'
+};
+
+function flattenEvolution(node, result = []) {
+  result.push({ id: idOf(node.species.url), name: node.species.name });
+  node.evolves_to.forEach(child => flattenEvolution(child, result));
+  return result;
+}
+
+function statsPanel(pkmn) {
+  const total = pkmn.stats.reduce((sum, stat) => sum + stat.base_stat, 0);
+  return `
+    <div class="panel-intro">Base stats and battle range at a glance.</div>
+    <div class="stats-list">
+      ${pkmn.stats.map(stat => `
+        <div class="stat">
+          <span>${statLabels[stat.stat.name]}</span><b>${stat.base_stat}</b>
+          <div class="bar"><i style="width:${Math.min(stat.base_stat / 200 * 100, 100)}%"></i></div>
+        </div>`).join('')}
+    </div>
+    <div class="total"><span>Base stat total</span><b>${total}</b></div>`;
+}
+
+function networkPanel(chain, currentId) {
+  const nodes = flattenEvolution(chain);
+  const width = Math.max(520, nodes.length * 170);
+  const y = 82;
+  const radius = 42;
+  const positions = nodes.map((node, index) => ({
+    ...node, x: 70 + index * ((width - 140) / Math.max(nodes.length - 1, 1))
+  }));
+  const edges = positions.slice(1).map((node, index) => `
+    <line class="evolution-edge" x1="${positions[index].x + radius}" y1="${y}"
+      x2="${node.x - radius}" y2="${y}"/>
+    <text class="evolution-label" x="${(positions[index].x + node.x) / 2}" y="${y - 10}">evolves to</text>`).join('');
+  const circles = positions.map(node => `
+    <g class="evolution-node ${node.id === currentId ? 'current' : ''}" data-open="${node.id}">
+      <circle cx="${node.x}" cy="${y}" r="${radius}"/>
+      <text x="${node.x}" y="${y - 2}">${node.name}</text>
+      <text class="evolution-dex" x="${node.x}" y="${y + 15}">${pad(node.id)}</text>
+    </g>`).join('');
+  return `
+    <div class="panel-intro">Evolution path for this Pokemon. Select a node to inspect it.</div>
+    <div class="evolution-wrap"><svg class="evolution-graph" viewBox="0 0 ${width} 150">${edges}${circles}</svg></div>`;
+}
+
+const weaknesses = {
+  normal: 'Fighting', fire: 'Water, Ground, Rock', water: 'Electric, Grass',
+  electric: 'Ground', grass: 'Fire, Ice, Poison, Flying, Bug', ice: 'Fire, Fighting, Rock, Steel',
+  fighting: 'Flying, Psychic, Fairy', poison: 'Ground, Psychic', ground: 'Water, Grass, Ice',
+  flying: 'Electric, Ice, Rock', psychic: 'Bug, Ghost, Dark', bug: 'Fire, Flying, Rock',
+  rock: 'Water, Grass, Fighting, Ground, Steel', ghost: 'Ghost, Dark', dragon: 'Ice, Dragon, Fairy',
+  dark: 'Fighting, Bug, Fairy', steel: 'Fire, Fighting, Ground', fairy: 'Poison, Steel'
+};
+
+function rulesPanel(pkmn) {
+  const stats = Object.fromEntries(pkmn.stats.map(stat => [stat.stat.name, stat.base_stat]));
+  const rules = pkmn.types.map(type => [`Type includes ${type.type.name}`, `Weak to ${weaknesses[type.type.name] || 'varied types'}`]);
+  if (stats.hp < 50) rules.push(['HP < 50', 'Fragility is high']);
+  if (stats.attack >= 100) rules.push(['Attack >= 100', 'Physical attacker']);
+  if (stats['special-attack'] >= 100) rules.push(['Sp. Atk >= 100', 'Special attacker']);
+  if (stats.defense >= 90) rules.push(['Defense >= 90', 'High bulk']);
+  if (stats.speed >= 100) rules.push(['Speed >= 100', 'Fast speed tier']);
+  if (stats.speed < 50) rules.push(['Speed < 50', 'Slow speed tier']);
+  return `
+    <div class="panel-intro">Condition-action rules for this Pokemon.</div>
+    <div class="rules-list">${rules.map((rule, index) => `
+      <div class="rule"><small>R${index + 1}</small><b>IF</b> ${rule[0]}<br><b>THEN</b> <span>${rule[1]}</span></div>`).join('')}</div>`;
+}
+
+function comparisonStats(pkmn) {
+  return pkmn.stats.map(stat => `
+    <div class="comparison-stat"><span>${statLabels[stat.stat.name]}</span><b>${stat.base_stat}</b></div>`).join('');
+}
+
+function renderOpponentSuggestions(input) {
+  const list = input.closest('.opponent-search-wrap').querySelector('.opponent-suggestions');
+  const query = input.value.trim().toLowerCase();
+  if (!query) {
+    list.innerHTML = '';
+    list.classList.remove('open');
+    return;
+  }
+  const matches = all.filter(p => p.name.includes(query)).slice(0, 8);
+  list.innerHTML = matches.map(p => `
+    <button class="search-suggestion opponent-suggestion" type="button" role="option" data-name="${p.name}">
+      <span>${p.name}</span><span class="search-suggestion-id">${pad(p.id)}</span>
+    </button>`).join('');
+  list.classList.toggle('open', matches.length > 0);
+}
+
+function comparisonProfile(pkmn, title, locked = false) {
+  const total = pkmn.stats.reduce((sum, stat) => sum + stat.base_stat, 0);
+  return `
+    <div class="comparison-profile">
+      <div class="comparison-profile-head">
+        <img src="${sprite(pkmn.id)}" alt="${pkmn.name}">
+        <div><b>${pkmn.name}</b><span>${locked ? 'chosen Pokemon' : 'opponent Pokemon'}</span></div>
+      </div>
+      <div class="comparison-stats">${comparisonStats(pkmn)}</div>
+      <div class="comparison-total"><span>Base total</span><b>${total}</b></div>
+    </div>`;
+}
+
+function winratePanel(pkmn) {
+  const opponent = detail.opponent;
+  const opponentValue = opponent ? opponent.pkmn.name : '';
+  if (!opponent) {
+    return `
+      <div class="panel-intro">Choose an opponent to compare both Pokemon.</div>
+      <div class="comparison-layout">
+        ${comparisonProfile(pkmn, 'Current Pokemon', true)}
+        <div class="versus-mark">VS</div>
+        <div class="comparison-profile opponent-empty">
+          <label for="opponent-select">Pokemon 1</label>
+          <div class="opponent-search-wrap">
+            <input id="opponent-select" class="opponent-search-input" value="${opponentValue}" placeholder="Choose a Pokemon" autocomplete="off" aria-autocomplete="list" aria-controls="opponent-suggestions">
+            <div id="opponent-suggestions" class="search-suggestions opponent-suggestions" role="listbox"></div>
+          </div>
+          <span class="comparison-placeholder">Select a Pokemon to show its stats.</span>
+        </div>
+      </div>`;
+  }
+
+  const leftTotal = pkmn.stats.reduce((sum, stat) => sum + stat.base_stat, 0);
+  const rightTotal = opponent.pkmn.stats.reduce((sum, stat) => sum + stat.base_stat, 0);
+  const leftScore = leftTotal + pkmn.stats.find(stat => stat.stat.name === 'speed').base_stat * .5;
+  const rightScore = rightTotal + opponent.pkmn.stats.find(stat => stat.stat.name === 'speed').base_stat * .5;
+  const leftWinrate = Math.round(Math.min(95, Math.max(5, 50 + (leftScore - rightScore) * .18)));
+  const rightWinrate = 100 - leftWinrate;
+  return `
+    <div class="panel-intro">Estimated from base stats and speed, not official match data.</div>
+    <div class="comparison-picker"><label for="opponent-select">Pokemon 1</label><div class="opponent-search-wrap"><input id="opponent-select" class="opponent-search-input" value="${opponentValue}" placeholder="Choose a Pokemon" autocomplete="off" aria-autocomplete="list" aria-controls="opponent-suggestions"><div id="opponent-suggestions" class="search-suggestions opponent-suggestions" role="listbox"></div></div></div>
+    <div class="comparison-layout">
+      ${comparisonProfile(pkmn, 'Current Pokemon', true)}
+      <div class="versus-mark">VS</div>
+      ${comparisonProfile(opponent.pkmn, 'Opponent Pokemon')}
+    </div>
+    <div class="winrate-result">
+      <div><b>${pkmn.name}</b><strong>${leftWinrate}%</strong></div>
+      <div class="winrate-bar"><i style="width:${leftWinrate}%"></i></div>
+      <p>${pkmn.name} has an estimated ${leftWinrate}% chance to win against ${opponent.pkmn.name}.</p>
+      <div><b>${opponent.pkmn.name}</b><strong>${rightWinrate}%</strong></div>
+    </div>`;
+}
+
+function panelForTab(tab) {
+  if (tab === 'Network') return networkPanel(detail.chain, detail.id);
+  if (tab === 'Rules') return rulesPanel(detail.pkmn);
+  if (tab === 'Winrate') return winratePanel(detail.pkmn);
+  return statsPanel(detail.pkmn);
+}
+
+function renderDetails() {
+  const { id, pkmn, species } = detail;
+  const flavor = (species.flavor_text_entries.find(entry => entry.language.name === 'en') || {}).flavor_text || '';
+  const genus = (species.genera.find(entry => entry.language.name === 'en') || {}).genus || '';
+  $('#panel').innerHTML = `
+    <button class="close" aria-label="Close">&times;</button>
+    <div class="detail-head">
+      <img class="detail-pokemon" src="${sprite(id)}" alt="${pkmn.name}">
+      <div class="detail-heading"><span class="detail-number">${pad(id)}</span><h2>${pkmn.name}</h2><p class="genus">${genus}</p></div>
+      <div class="types">${pkmn.types.map(type => `<span style="background:${typeColors[type.type.name] || 'var(--ink)'}">${type.type.name}</span>`).join('')}</div>
+    </div>
+    <p class="flavor">${flavor.replace(/[\n\f]/g, ' ')}</p>
+    <div class="detail-tabs">${tabs.map(tab => `<button class="detail-tab ${tab === activeTab ? 'active' : ''}" data-tab="${tab}">${tab}</button>`).join('')}</div>
+    <div class="detail-content">${panelForTab(activeTab)}</div>`;
+}
+
+function updateNav() {
+  const i = all.findIndex(p => p.id === currentId);
+  $('#prev').disabled = i <= 0;
+  $('#next').disabled = i === -1 || i >= all.length - 1;
+}
+
+function step(dir) {
+  const i = all.findIndex(p => p.id === currentId);
+  const target = all[i + dir];
+  if (target) showDetails(target.id, activeTab);
+}
+
+async function showDetails(id, tab = 'Stats') {
+  const panel = $('#panel');
+  currentId = id;
+  updateNav();
+  $('#modal').classList.add('open');
+  panel.innerHTML = '<p class="msg">Loading…</p>';
+  try {
+    const [pkmn, species] = await Promise.all([
+      fetchAPI(`https://pokeapi.co/api/v2/pokemon/${id}`),
+      fetchAPI(`https://pokeapi.co/api/v2/pokemon-species/${id}`)
+    ]);
+    const chain = await fetchAPI(species.evolution_chain.url);
+    detail = { id, pkmn, species, chain: chain.chain };
+    activeTab = tab;
+    renderDetails();
+  } catch (err) {
+    console.error('Failed to load Pokémon:', err);
+    panel.innerHTML = '<button class="close" aria-label="Close">&times;</button><p class="msg">Could not load this Pokémon. Check your connection and try again.</p>';
+  }
+}
+ 
+$('#grid').addEventListener('click', e => {
+  const card = e.target.closest('.card');
+  if (card) showDetails(Number(card.dataset.id));
+});
+$('#prev').addEventListener('click', () => step(-1));
+$('#next').addEventListener('click', () => step(1));
+$('#modal').addEventListener('click', e => {
+  if (e.target.id === 'modal' || e.target.closest('.close')) $('#modal').classList.remove('open');
+  const suggestion = e.target.closest('.opponent-suggestion');
+  if (suggestion) {
+    const input = $('#opponent-select');
+    input.value = suggestion.dataset.name;
+    input.closest('.opponent-search-wrap').querySelector('.opponent-suggestions').classList.remove('open');
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  const tab = e.target.closest('[data-tab]');
+  if (tab && detail) { activeTab = tab.dataset.tab; renderDetails(); }
+  const node = e.target.closest('[data-open]');
+  if (node) showDetails(Number(node.dataset.open));
+});
+$('#modal').addEventListener('input', e => {
+  if (e.target.id === 'opponent-select') renderOpponentSuggestions(e.target);
+});
+$('#modal').addEventListener('change', async e => {
+  if (e.target.id !== 'opponent-select' || !detail) return;
+  const query = e.target.value.trim().toLowerCase();
+  const selected = all.find(p => p.name.toLowerCase() === query || String(p.id) === query.replace(/^#0*/, ''));
+  if (!selected) return;
+  try {
+    e.target.disabled = true;
+    detail.opponent = { id: selected.id, pkmn: await fetchAPI(`https://pokeapi.co/api/v2/pokemon/${selected.id}`) };
+    renderDetails();
+  } catch (err) {
+    console.error('Failed to load opponent:', err);
+    e.target.disabled = false;
+  }
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') $('#modal').classList.remove('open');
+  if (!$('#modal').classList.contains('open') || e.target.tagName === 'INPUT') return;
+  if (e.key === 'ArrowLeft') step(-1);
+  if (e.key === 'ArrowRight') step(1);
+});
+ 
+$('#search').addEventListener('input', e => {
+  updateGrid();
+});
+$('#search-suggestions').addEventListener('click', e => {
+  const suggestion = e.target.closest('.search-suggestion');
+  if (!suggestion) return;
+  $('#search').value = suggestion.dataset.name;
+  updateGrid();
+  $('#search-suggestions').classList.remove('open');
+  $('#search').focus();
+});
+$('#search').addEventListener('keydown', e => {
+  if (e.key === 'Escape') $('#search-suggestions').classList.remove('open');
+});
+document.addEventListener('click', e => {
+  if (!e.target.closest('.search-wrap')) $('#search-suggestions').classList.remove('open');
+});
+$('#sort').addEventListener('change', e => {
+  sortMode = e.target.value;
+  e.target.parentElement.classList.add('has-value');
+  updateGrid();
+});
+$('.search-clear').addEventListener('click', () => {
+  $('#search').value = '';
+  $('#search').focus();
+  updateGrid();
+});
+ 
+(async () => {
+  try {
+    all = await getGen6Pokemon();
+    render(all);
+  } catch (err) {
+    console.error(err);
+    $('#grid').innerHTML = '<p class="msg">Could not load the Pokémon list. Check your connection and refresh.</p>';
+  }
+})();
+</script>
+</body>
+</html>
+ 
