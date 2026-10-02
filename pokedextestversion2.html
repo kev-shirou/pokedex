@@ -23,7 +23,6 @@
       </div>
       <div class="search-wrap">
         <input id="search" class="search" type="search" placeholder="Search Pokémon" aria-label="Search Pokémon by name or number" autocomplete="off" aria-autocomplete="list" aria-controls="search-suggestions">
-        <button class="search-clear" type="button" aria-label="Clear search">×</button>
         <div id="search-suggestions" class="search-suggestions" role="listbox"></div>
       </div>
     </div>
@@ -127,12 +126,6 @@ const statLabels = {
   'special-attack': 'Sp. Atk', 'special-defense': 'Sp. Def', speed: 'Speed'
 };
 
-function flattenEvolution(node, result = []) {
-  result.push({ id: idOf(node.species.url), name: node.species.name });
-  node.evolves_to.forEach(child => flattenEvolution(child, result));
-  return result;
-}
-
 function statsPanel(pkmn) {
   const total = pkmn.stats.reduce((sum, stat) => sum + stat.base_stat, 0);
   return `
@@ -148,26 +141,101 @@ function statsPanel(pkmn) {
 }
 
 function networkPanel(chain, currentId) {
-  const nodes = flattenEvolution(chain);
-  const width = Math.max(520, nodes.length * 170);
-  const y = 82;
   const radius = 42;
-  const positions = nodes.map((node, index) => ({
-    ...node, x: 70 + index * ((width - 140) / Math.max(nodes.length - 1, 1))
-  }));
-  const edges = positions.slice(1).map((node, index) => `
-    <line class="evolution-edge" x1="${positions[index].x + radius}" y1="${y}"
-      x2="${node.x - radius}" y2="${y}"/>
-    <text class="evolution-label" x="${(positions[index].x + node.x) / 2}" y="${y - 10}">evolves to</text>`).join('');
-  const circles = positions.map(node => `
+  const nodes = [];
+  const edges = [];
+  const leafCursor = { value: 0 };
+  let width;
+  let height;
+  if (chain.species.name === 'eevee' && chain.evolves_to.length) {
+    width = 800;
+    height = 800;
+    const center = { x: width / 2, y: height / 2 };
+    const root = {
+      id: idOf(chain.species.url),
+      name: chain.species.name,
+      ...center
+    };
+    nodes.push(root);
+    const orbitRadius = 275;
+    chain.evolves_to.forEach((child, index) => {
+      const angle = -Math.PI / 2 + index * 2 * Math.PI / chain.evolves_to.length;
+      const position = {
+        id: idOf(child.species.url),
+        name: child.species.name,
+        x: center.x + Math.cos(angle) * orbitRadius,
+        y: center.y + Math.sin(angle) * orbitRadius
+      };
+      nodes.push(position);
+      const item = child.evolution_details.find(detail => detail.item)?.item;
+      edges.push({ from: root, to: position, item });
+    });
+  } else {
+    function layout(node, depth, parent = null) {
+      const position = {
+        id: idOf(node.species.url),
+        name: node.species.name,
+        x: 70 + depth * 190,
+        y: 0
+      };
+      nodes.push(position);
+      if (parent) {
+        const item = node.evolution_details.find(detail => detail.item)?.item;
+        edges.push({ from: parent, to: position, item });
+      }
+      const children = node.evolves_to.map(child => layout(child, depth + 1, position));
+      position.y = children.length
+        ? children.reduce((sum, child) => sum + child.y, 0) / children.length
+        : 70 + leafCursor.value++ * 130;
+      return position;
+    }
+    layout(chain, 0);
+    const maxDepth = Math.max(...nodes.map(node => (node.x - 70) / 190));
+    width = Math.max(520, maxDepth * 190 + 140);
+    height = Math.max(150, leafCursor.value * 130 + 20);
+  }
+  const edgeMarkup = edges.map(({ from, to, item }) => {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const distance = Math.hypot(dx, dy);
+    const unitX = dx / distance;
+    const unitY = dy / distance;
+    const startX = from.x + unitX * radius;
+    const startY = from.y + unitY * radius;
+    const endX = to.x - unitX * radius;
+    const endY = to.y - unitY * radius;
+    const midX = (startX + endX) / 2;
+    const midY = (startY + endY) / 2;
+    const labelX = midX + unitY * 30;
+    const labelY = midY - unitX * 30;
+    const path = `<path class="evolution-edge" d="M ${startX} ${startY} L ${endX} ${endY}"/>`;
+    if (!item) {
+      return `
+        ${path}
+        <text class="evolution-label" x="${labelX}" y="${labelY}">evolves to</text>`;
+    }
+    const label = item.name.replace(/-/g, ' ');
+    const labelWidth = label.length * 6.5;
+    const iconSize = 18;
+    const groupWidth = labelWidth + iconSize + 6;
+    const itemLabelX = labelX - groupWidth / 2;
+    return `
+      ${path}
+      <rect class="evolution-item-label-bg" x="${itemLabelX - 4}" y="${labelY - 13}" width="${groupWidth + 8}" height="26" rx="6"/>
+      <text class="evolution-item-label" x="${itemLabelX}" y="${labelY + 4}">${label}</text>
+      <image class="evolution-item-icon" href="https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/items/${item.name}.png"
+        x="${itemLabelX + labelWidth + 6}" y="${labelY - 9}" width="${iconSize}" height="${iconSize}"
+        role="img" aria-label="${label}"/>`;
+  }).join('');
+  const circles = nodes.map(node => `
     <g class="evolution-node ${node.id === currentId ? 'current' : ''}" data-open="${node.id}">
-      <circle cx="${node.x}" cy="${y}" r="${radius}"/>
-      <text x="${node.x}" y="${y - 2}">${node.name}</text>
-      <text class="evolution-dex" x="${node.x}" y="${y + 15}">${pad(node.id)}</text>
+      <circle cx="${node.x}" cy="${node.y}" r="${radius}"/>
+      <text x="${node.x}" y="${node.y - 2}">${node.name}</text>
+      <text class="evolution-dex" x="${node.x}" y="${node.y + 15}">${pad(node.id)}</text>
     </g>`).join('');
   return `
     <div class="panel-intro">Evolution path for this Pokemon. Select a node to inspect it.</div>
-    <div class="evolution-wrap"><svg class="evolution-graph" viewBox="0 0 ${width} 150">${edges}${circles}</svg></div>`;
+    <div class="evolution-wrap"><svg class="evolution-graph" viewBox="0 0 ${width} ${height}">${edgeMarkup}${circles}</svg></div>`;
 }
 
 const weaknesses = {
@@ -390,11 +458,6 @@ document.addEventListener('click', e => {
 $('#sort').addEventListener('change', e => {
   sortMode = e.target.value;
   e.target.parentElement.classList.add('has-value');
-  updateGrid();
-});
-$('.search-clear').addEventListener('click', () => {
-  $('#search').value = '';
-  $('#search').focus();
   updateGrid();
 });
  
