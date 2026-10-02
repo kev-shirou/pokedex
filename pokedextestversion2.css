@@ -25,7 +25,7 @@ h1 small{display:block;font-size:1.05rem;font-weight:400;color:#6d758a;margin-to
 .search-suggestion-id{color:#b9c4db;font: .9rem monospace}
 .home-layout{display:flex;align-items:flex-start;gap:20px}
 .grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:18px;flex:1;min-width:0}
-.card{position:relative;background:#f2f4f7;border:0;border-radius:26px;padding:20px 14px 16px;height:208px;display:flex;flex-direction:column;align-items:center;justify-content:space-between;cursor:pointer;font:inherit;color:inherit;overflow:hidden;transition:transform .25s,box-shadow .25s;box-shadow:0 2px 0 rgba(15,24,40,.04)}
+.card{position:relative;background:#F6F9F7;border:0;border-radius:26px;padding:20px 14px 16px;height:208px;display:flex;flex-direction:column;align-items:center;justify-content:space-between;cursor:pointer;font:inherit;color:inherit;overflow:hidden;transition:transform .25s,box-shadow .25s;box-shadow:0 2px 0 rgba(15,24,40,.04)}
 .card::before{content:"";position:absolute;inset:0;background:#edf3f9;opacity:0;transition:opacity .25s}
 .card>*{position:relative}
 .card:hover,.card:focus-visible{transform:translateY(-8px);box-shadow:0 16px 28px rgba(29,35,64,.16);outline:none}
